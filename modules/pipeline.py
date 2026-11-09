@@ -22,7 +22,7 @@ def family_allergens(profile: dict) -> set:
 
 def analyze(profile: dict, *, barcode: str | None = None, text: str | None = None,
             image_bytes: bytes | None = None, use_live_off: bool = True,
-            use_live_alternatives: bool = False) -> dict:
+            use_live_alternatives: bool = False, sensitivity: str = "maximum") -> dict:
     """
     Run the full pipeline. Exactly one of barcode / text / image_bytes is used
     (priority: text if given explicitly, then barcode, then image).
@@ -48,7 +48,7 @@ def analyze(profile: dict, *, barcode: str | None = None, text: str | None = Non
     if product and product.get("found"):
         merge_off_tags(detected, product.get("allergens_tags"), product.get("traces_tags"))
 
-    verdict = match_profile(detected, profile)
+    verdict = match_profile(detected, profile, sensitivity=sensitivity)
     additives = additives_service.find_additives(ingredient_text)
     alternatives = alternatives_service.get_alternatives(
         family_allergens(profile),
@@ -56,6 +56,7 @@ def analyze(profile: dict, *, barcode: str | None = None, text: str | None = Non
         product_name=(product or {}).get("product_name", ""),
         categories_tags=(product or {}).get("categories_tags"),
         use_live=use_live_alternatives,
+        exclude_barcode=(product or {}).get("barcode"),
     )
 
     return {

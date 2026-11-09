@@ -69,6 +69,36 @@ MOCK_PRODUCTS = {
         "categories_tags": ["en:breakfasts", "en:breakfast-cereals", "en:mueslis"],
         "quantity": "450 g",
     },
+    "8412224028852": {
+        "barcode": "8412224028852",
+        "product_name": "Mini tortitas de maíz y quinoa",
+        "brands": "Diet Rádisson",
+        "ingredients_text": "Maíz (88%), quinoa (9%), sal marina, aceite de oliva virgen extra y "
+                            "emulgente (lecitina de girasol).",
+        "allergens_tags": [],
+        "traces_tags": [],
+        "image_url": "https://images.openfoodfacts.org/images/products/841/222/402/8852/front_en.26.400.jpg",
+        "nutriscore_grade": "c",
+        "categories_tags": ["en:plant-based-foods", "en:cereals-and-their-products", "en:puffed-cereal-cakes"],
+        "quantity": "50 g",
+    },
+    "8431876336764": {
+        "barcode": "8431876336764",
+        "product_name": "Croissants",
+        "brands": "Simpl",
+        "ingredients_text": "Harina de trigo, grasa vegetal de palma, azúcar, dextrosa, huevo, suero de leche en polvo, "
+                            "aceites vegetales (girasol, soja) en proporción variable, levadura, sal, emulgentes "
+                            "(monoglicéridos y diglicéridos de ácidos grasos y ésteres mono-acetil y diacetil "
+                            "tartáricos de monoglicéridos y diglicéridos de ácidos grasos), estabilizantes "
+                            "(carboximetilcelulosa y goma guar), conservadores (propionato cálcico y sorbato "
+                            "potásico), proteínas de la leche, aromas, gluten de trigo y colorante (carotenos).",
+        "allergens_tags": ["en:eggs", "en:gluten", "en:milk", "en:soybeans"],
+        "traces_tags": ["en:nuts", "en:sesame-seeds", "en:soybeans"],
+        "image_url": "https://images.openfoodfacts.org/images/products/843/187/633/6764/front_es.11.400.jpg",
+        "nutriscore_grade": "e",
+        "categories_tags": ["en:snacks", "en:sweet-pastries-and-pies", "en:viennoiseries", "en:croissants"],
+        "quantity": "350 g",
+    },
     "5449000000996": {
         "barcode": "5449000000996",
         "product_name": "Coca-Cola Original",

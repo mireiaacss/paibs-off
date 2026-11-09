@@ -9,14 +9,17 @@ Metrics
                           derivatives, no false-friend handling, no trace parsing.
                           The project spec reference for this baseline is 57 %.
 
-Usage:  python benchmark/benchmark_runner.py   (exit code 1 if we don't beat the baseline
-        or raise any false alarm)
+Usage:
+  python benchmark/benchmark_runner.py              printed report (exit 1 if baseline not beaten
+                                                    or any false alarm is raised)
+  python -m unittest benchmark/benchmark_runner.py  the same checks as unit tests
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -126,6 +129,35 @@ def run_benchmark(path: Path = CASES_PATH) -> dict:
             "lift_vs_baseline_pp": (recall - baseline_ref) * 100,
         },
     }
+
+
+class BenchmarkRun1Test(unittest.TestCase):
+    """Run 1 acceptance checks for the 10 canonical cases."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.report = run_benchmark()
+
+    def test_each_case_detected_exactly(self):
+        for row in self.report["cases"]:
+            with self.subTest(case=row["id"], group=row["group"]):
+                self.assertEqual(row["missed"], [], f"missed allergens in case {row['id']}")
+                self.assertEqual(row["false_alarms"], [], f"false alarms in case {row['id']}")
+                self.assertEqual(row["detected_contains"], row["expected_contains"])
+                self.assertEqual(row["detected_may_contain"], row["expected_may_contain"])
+
+    def test_catch_rate_meets_target(self):
+        self.assertGreaterEqual(self.report["summary"]["catch_rate"], 0.95)
+
+    def test_beats_naive_baseline(self):
+        s = self.report["summary"]
+        self.assertGreater(s["catch_rate"], s["baseline_reference"])
+        self.assertGreater(s["catch_rate"], s["naive_catch_rate"])
+
+    def test_zero_false_alarms_on_false_friends(self):
+        case4 = next(r for r in self.report["cases"] if r["id"] == 4)
+        self.assertEqual(case4["detected_contains"] + case4["detected_may_contain"], [])
+        self.assertGreater(len(case4["naive_false_alarms"]), 0)   # the baseline does raise them
 
 
 def _fmt(items: list) -> str:

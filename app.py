@@ -1,296 +1,386 @@
 """
-PAIBS Group 10 - AI allergen label scanner (Level 2: Walking Skeleton).
+Allergen & Additive Verification Tool - Streamlit front end.
 
 Run:  streamlit run app.py
 """
 
 from __future__ import annotations
 
+import html
+
 import pandas as pd
 import streamlit as st
 
 import config
-from benchmark.benchmark_runner import run_benchmark
 from modules import ocr_reader
-from modules.off_client import MOCK_PRODUCTS
 from modules.pipeline import analyze
-from modules.profile_matcher import ALERT, SAFE, TRACES, UNCERTAIN, load_profiles
+from modules.profile_matcher import ALERT, TRACES, UNCERTAIN, load_profiles
 
-st.set_page_config(page_title="SafeBite Scanner - PAIBS G10", page_icon="🛡️", layout="wide")
+APP_NAME = "Allergen & Additive Verification Tool"
+
+st.set_page_config(page_title=APP_NAME, layout="wide", initial_sidebar_state="expanded")
+
+# ---------------------------------------------------------------------------
+# Reference data for the input helpers
+# ---------------------------------------------------------------------------
+SAMPLE_BARCODES = {
+    "Standard snack": "5000159407236",            # Mars bar
+    "Allergen-free grain cake": "8412224028852",  # Corn & quinoa cakes
+    "Processed pastry": "8431876336764",          # Supermarket croissants
+    "Chocolate spread": "3017620422003",          # Nutella
+}
 
 SAMPLE_TEXTS = {
-    "Surimi salad (ES)": "Surimi (pescado blanco, almidón de trigo, clara de huevo), gambas, mejillones, salsa (mostaza)",
-    "Chocolate with traces (ES)": "Chocolate negro, almendras. Puede contener trazas de cacahuete, leche y sésamo",
-    "Biscuits with hidden dairy (ES)": "Harina de trigo, azúcar, aceite de palma, suero lácteo en polvo, caseinato sódico, "
-                                      "lecitina de soja, gasificante (E500), sal, aromas.",
-    "False friends (EN)": "Buckwheat flour, coconut milk, cocoa butter, lactic acid, nutmeg",
-    "Dried apricots (EN)": "Dried apricots, preservative (E220)",
-    "Clean rice (ES)": "Arroz, agua, aceite de oliva virgen extra, sal",
+    "Hidden dairy derivatives": "Harina de trigo, azúcar, aceite de palma, suero lácteo en polvo, "
+                                "caseinato sódico, lecitina de soja, gasificante (E500), sal, aromas.",
+    "Precautionary traces": "Chocolate negro, almendras. Puede contener trazas de cacahuete, leche y sésamo.",
+    "Seafood preparation": "Surimi (pescado blanco, almidón de trigo, clara de huevo), gambas, "
+                           "mejillones, salsa (mostaza)",
+    "Look-alike terms": "Buckwheat flour, coconut milk, cocoa butter, lactic acid, nutmeg",
+    "Preserved fruit": "Dried apricots, preservative (E220)",
 }
 
-VERDICT_STYLE = {
-    ALERT: ("#b91c1c", "#fee2e2", "⛔"),
-    TRACES: ("#c2410c", "#ffedd5", "⚠️"),
-    UNCERTAIN: ("#a16207", "#fef9c3", "❓"),
-    SAFE: ("#15803d", "#dcfce7", "✅"),
+EU_NAME = {
+    "Gluten": "Gluten", "Crustaceans": "Crustaceans", "Eggs": "Egg", "Fish": "Fish",
+    "Peanuts": "Peanut", "Soy": "Soybean", "Milk": "Milk", "Nuts": "Tree nuts",
+    "Celery": "Celery", "Mustard": "Mustard", "Sesame": "Sesame", "Sulphites": "Sulphites",
+    "Lupin": "Lupin", "Molluscs": "Molluscs",
 }
 
+STATUS = {
+    "conflict": ("RESTRICTION CONFLICT DETECTED", "status-conflict"),
+    "trace": ("POTENTIAL TRACE EXPOSURE", "status-trace"),
+    "unverified": ("UNVERIFIED COMPONENTS REQUIRE REVIEW", "status-trace"),
+    "no_data": ("INSUFFICIENT INGREDIENT DATA", "status-trace"),
+    "clear": ("NO CONFLICTS IDENTIFIED WITH ACTIVE PROFILE", "status-clear"),
+}
 
-def allergen_label(key: str) -> str:
-    info = config.ALLERGENS[key]
-    return f"{info['icon']} {info['label']} / {info['label_es']}"
+SENSITIVITY_OPTIONS = {
+    "Maximum Caution (flag all traces and ambiguous terms)": "maximum",
+    "Standard Sensitivity": "standard",
+}
+
+# ---------------------------------------------------------------------------
+# Styling
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+  html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                                "Helvetica Neue", Arial, sans-serif; }
+  .block-container { padding-top: 2rem; max-width: 1200px; }
+  h1 { font-size: 1.6rem !important; font-weight: 650 !important; letter-spacing: -0.01em; margin-bottom: 0.25rem; }
+  h3 { font-size: 1.05rem !important; font-weight: 600 !important; }
+  .notice { border: 1px solid #d1d5db; background: #f9fafb; color: #374151; padding: 10px 14px;
+            border-radius: 4px; font-size: 0.9rem; margin: 0.5rem 0 1.25rem 0; }
+  .section-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+                   color: #6b7280; margin: 1.1rem 0 0.4rem 0; }
+  .status { padding: 14px 18px; border-radius: 4px; border-left: 5px solid; margin-bottom: 0.75rem; }
+  .status-title { font-weight: 700; font-size: 1.05rem; letter-spacing: 0.02em; }
+  .status-detail { font-size: 0.9rem; margin-top: 4px; }
+  .status-conflict { background: #f2dede; border-color: #8b2e2e; color: #3d1212; }
+  .status-trace { background: #f5ead0; border-color: #9a6b12; color: #3f2c06; }
+  .status-clear { background: #e3eae4; border-color: #4b6352; color: #1f2d23; }
+  .term-list { border: 1px solid #e5e7eb; border-radius: 4px; }
+  .term-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px;
+              border-bottom: 1px solid #f0f1f3; font-size: 0.9rem; color: #111827; }
+  .term-row:last-child { border-bottom: none; }
+  .term-src { color: #374151; }
+  .term-cat { font-weight: 600; white-space: nowrap; }
+  .restricted { background: #fbf3f3; }
+  .tag { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 3px;
+         border: 1px solid #8b2e2e; color: #8b2e2e; margin-left: 8px; }
+  .empty { color: #6b7280; font-size: 0.9rem; padding: 6px 0; }
+  .meta { color: #4b5563; font-size: 0.85rem; }
+  .product-name { font-size: 1.1rem; font-weight: 600; color: #111827; }
+</style>
+""", unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 @st.cache_data
-def cached_profiles():
+def cached_profiles() -> list[dict]:
     return load_profiles()
 
+
+def esc(value) -> str:
+    return html.escape(str(value))
+
+
+def display_term(term: str) -> str:
+    if term.startswith("OFF tag"):
+        return "Manufacturer declaration (Open Food Facts)"
+    if term.startswith("\\b"):
+        return "Sulphite additive (E220-E228)"
+    return term[:1].upper() + term[1:]
+
+
+def section_label(text: str) -> None:
+    st.markdown(f"<div class='section-label'>{esc(text)}</div>", unsafe_allow_html=True)
+
+
+def term_rows(detected: dict, section: str, restricted: set) -> str:
+    keys = sorted(detected["contains"] if section == "contains" else detected["may_contain"],
+                  key=lambda k: (k not in restricted, k))
+    if not keys:
+        return "<div class='empty'>None identified.</div>"
+    rows = []
+    for key in keys:
+        terms = [t for t in detected["detected_terms"].get(key, []) if t["section"] == section]
+        names = ", ".join(dict.fromkeys(display_term(t["term"]) for t in terms)) or "-"
+        tag = "<span class='tag'>RESTRICTED</span>" if key in restricted else ""
+        css = "term-row restricted" if key in restricted else "term-row"
+        rows.append(f"<div class='{css}'><span class='term-src'>{esc(names)}</span>"
+                    f"<span class='term-cat'>&rarr; {esc(EU_NAME[key])}{tag}</span></div>")
+    return "<div class='term-list'>" + "".join(rows) + "</div>"
+
+
+def status_for(verdict: dict, detected: dict) -> tuple[str, str]:
+    """Map the matcher verdict to a status card key and a detail line."""
+    members = verdict["members"]
+    multi = len(members) > 1
+
+    def who(m):
+        return f"{m['name']}: " if multi else ""
+
+    overall = verdict["overall_verdict"]
+    if overall == ALERT:
+        parts = [who(m) + ", ".join(EU_NAME[a] for a in m["contains_hits"]) for m in members if m["contains_hits"]]
+        detail = "Restricted allergen present as a direct ingredient - " + "; ".join(parts) + "."
+        traces = sorted({a for m in members for a in m["trace_hits"]})
+        if traces:
+            detail += " Precautionary statement also lists " + ", ".join(EU_NAME[a] for a in traces) + "."
+        return "conflict", detail
+    if overall == TRACES:
+        parts = [who(m) + ", ".join(EU_NAME[a] for a in m["trace_hits"]) for m in members if m["trace_hits"]]
+        return "trace", ("Restricted allergen listed in a precautionary (may contain) statement - "
+                         + "; ".join(parts) + ".")
+    if overall == UNCERTAIN:
+        if any(w["type"] == "no_text" for w in detected["warnings"]):
+            return "no_data", "No ingredient list was available. The product cannot be assessed; inspect the packaging."
+        hits = sorted({(u["term"], a) for m in members for u in m["uncertain_hits"] for a in u["allergens"]})
+        detail = "; ".join(f"'{t}' may contain {EU_NAME[a]}" for t, a in hits)
+        return "unverified", f"Ambiguous ingredients could conceal a restricted allergen: {detail}."
+    pending = sum(len(m["uncertain_hits"]) for m in members)
+    if pending:
+        return "clear", (f"{pending} unverified component(s) that could relate to the profile are listed below "
+                         "and were not counted at Standard Sensitivity.")
+    return "clear", "No restricted allergen was found in the ingredient list or precautionary statements."
+
+
+def set_state(key: str, value: str) -> None:
+    st.session_state[key] = value
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+profiles = cached_profiles()
+with st.sidebar:
+    st.markdown("### Active Profile")
+    names = [p["family_name"] for p in profiles] + ["Custom Profile"]
+    profile_name = st.selectbox("Profile", names, label_visibility="collapsed")
+    if profile_name == "Custom Profile":
+        custom = st.multiselect("Restricted allergens", list(config.ALLERGENS), default=["Milk"],
+                                format_func=lambda k: EU_NAME[k])
+        profile = {"family_name": "Custom Profile", "members": [{"name": "Custom", "allergens": custom}]}
+    else:
+        profile = next(p for p in profiles if p["family_name"] == profile_name)
+
+    for member in profile["members"]:
+        restricted_names = ", ".join(EU_NAME[a] for a in member["allergens"]) or "None"
+        label = f"{member['name']}: " if len(profile["members"]) > 1 else "Restrictions: "
+        st.markdown(f"<div class='meta'>{esc(label)}{esc(restricted_names)}</div>", unsafe_allow_html=True)
+
+    st.markdown("### Detection Threshold")
+    sensitivity_label = st.radio("Detection threshold", list(SENSITIVITY_OPTIONS), label_visibility="collapsed",
+                                 help="Maximum Caution treats ambiguous ingredients (unspecified flavourings, "
+                                      "starch, lecithin, vegetable oil) as potential exposures. Standard Sensitivity "
+                                      "lists them for review without changing the status.")
+    sensitivity = SENSITIVITY_OPTIONS[sensitivity_label]
+
+    st.markdown("### Data Sources")
+    use_live_off = st.checkbox("Live Open Food Facts lookup", value=True,
+                               help="When disabled or unreachable, a local cache of reference products is used.")
+    use_live_alts = st.checkbox("Live alternative search", value=True,
+                                help="Searches Open Food Facts for same-category products without the profile's "
+                                     "allergens. Falls back to a curated list.")
+
+restricted = {a for m in profile["members"] for a in m["allergens"]}
+signature = (profile_name, tuple(sorted(restricted)), sensitivity)
 
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
-st.title("🛡️ SafeBite - Allergen Label Scanner")
-st.caption("ESADE PAIBS · Group 10 · **Level 2 - Walking Skeleton running**")
-st.error("⚠️ **Important: Always inspect the physical packaging label.** "
-         "This prototype is a decision aid, not a medical device.")
-
-tab_demo, tab_bench, tab_arch = st.tabs(
-    ["🔎 Live Demo", "📊 Benchmark & Level 2 Validation", "🏗️ Architecture & Real vs Faked"])
+st.title(APP_NAME)
+st.markdown(f"<div class='notice'>{esc(config.SAFETY_DISCLAIMER)}</div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Tab 1: Live demo
+# Step 1 - Input
 # ---------------------------------------------------------------------------
-with tab_demo:
-    profiles = cached_profiles()
-    left, right = st.columns([1, 2], gap="large")
+st.markdown("### 1. Product Input")
+mode = st.segmented_control("Input method", ["Barcode Lookup", "Label Photo", "Ingredient Text"],
+                            default="Barcode Lookup", required=True, key="mode")
 
+barcode = text = None
+photo_ready = True
+
+if mode == "Barcode Lookup":
+    st.session_state.setdefault("barcode_input", SAMPLE_BARCODES["Standard snack"])
+    st.text_input("EAN / UPC barcode", key="barcode_input", placeholder="e.g. 8431876336764")
+    cols = st.columns(len(SAMPLE_BARCODES))
+    for col, (label, code) in zip(cols, SAMPLE_BARCODES.items()):
+        col.button(label, key=f"bc_{code}", on_click=set_state, args=("barcode_input", code), width="stretch")
+    barcode = st.session_state["barcode_input"]
+
+elif mode == "Label Photo":
+    upload = st.file_uploader("Label photo", type=["png", "jpg", "jpeg"])
+    camera = st.camera_input("Camera") if st.checkbox("Use device camera") else None
+    source = camera or upload
+    if source is None:
+        photo_ready = False
+        st.markdown("<div class='meta'>Upload a clear, well-lit photo of the ingredient panel.</div>",
+                    unsafe_allow_html=True)
+    else:
+        image_bytes = source.getvalue()
+        ocr_key = f"ocr_{hash(image_bytes)}"
+        if ocr_key not in st.session_state:
+            with st.spinner("Extracting text"):
+                st.session_state[ocr_key] = ocr_reader.read_label(image_bytes)
+        ocr = st.session_state[ocr_key]
+        img_col, txt_col = st.columns([1, 2])
+        img_col.image(image_bytes, width="stretch")
+        with txt_col:
+            if ocr["is_stub"]:
+                st.warning("Text recognition is unavailable on this installation. Sample text has been inserted; "
+                           "replace it with the ingredient list from the photo.")
+            else:
+                st.markdown(f"<div class='meta'>Text recognised with {esc(ocr['engine'].title())}. "
+                            "Review and correct before analysis.</div>", unsafe_allow_html=True)
+            text = st.text_area("Extracted ingredient text", value=ocr["text"], height=170, key=f"txt_{ocr_key}")
+
+else:
+    st.session_state.setdefault("ingredient_text", "")
+    st.text_area("Ingredient list (English or Spanish)", key="ingredient_text", height=130,
+                 placeholder="Ingredientes: harina de trigo, leche entera en polvo, ...")
+    cols = st.columns(len(SAMPLE_TEXTS))
+    for col, (label, sample) in zip(cols, SAMPLE_TEXTS.items()):
+        col.button(label, key=f"tx_{label}", on_click=set_state, args=("ingredient_text", sample), width="stretch")
+    text = st.session_state["ingredient_text"]
+
+run = st.button("Analyze Ingredients", type="primary", disabled=not photo_ready)
+
+if run:
+    if mode == "Barcode Lookup" and not (barcode or "").strip():
+        st.error("Enter a barcode.")
+    elif mode != "Barcode Lookup" and not (text or "").strip():
+        st.error("Enter or extract an ingredient list.")
+    else:
+        with st.spinner("Analysing"):
+            result = analyze(
+                profile,
+                barcode=barcode if mode == "Barcode Lookup" else None,
+                text=text if mode != "Barcode Lookup" else None,
+                use_live_off=use_live_off,
+                use_live_alternatives=use_live_alts,
+                sensitivity=sensitivity,
+            )
+        st.session_state["result"] = result
+        st.session_state["result_signature"] = signature
+
+# ---------------------------------------------------------------------------
+# Step 2 - Assessment
+# ---------------------------------------------------------------------------
+res = st.session_state.get("result")
+if res:
+    st.markdown("### 2. Assessment")
+    if st.session_state.get("result_signature") != signature:
+        st.info("The active profile or detection threshold has changed. Select Analyze Ingredients to update "
+                "the assessment.")
+        st.stop()
+
+    product = res["product"]
+    if product is not None:
+        if product.get("found"):
+            info_col, img_col = st.columns([5, 1])
+            source = "Open Food Facts" if product["source"] == "live" else "Open Food Facts (cached record)"
+            nutri = product.get("nutriscore_grade", "unknown")
+            nutri = nutri.upper() if nutri and nutri not in ("unknown", "not-applicable") else "Not available"
+            info_col.markdown(
+                f"<div class='product-name'>{esc(product['product_name'])}</div>"
+                f"<div class='meta'>{esc(product.get('brands', ''))}"
+                f"{' &middot; ' + esc(product['quantity']) if product.get('quantity') else ''}"
+                f" &middot; Barcode {esc(product['barcode'])} &middot; Nutri-Score: {esc(nutri)}"
+                f" &middot; Source: {esc(source)}</div>", unsafe_allow_html=True)
+            if product.get("image_url"):
+                img_col.image(product["image_url"], width=90)
+        else:
+            st.markdown(f"<div class='meta'>Barcode {esc(product.get('barcode', ''))} was not found in Open Food "
+                        "Facts. Use Label Photo or Ingredient Text instead.</div>", unsafe_allow_html=True)
+
+    detected = res["detected"]
+    status_key, detail = status_for(res["verdict"], detected)
+    title, css = STATUS[status_key]
+    st.markdown(f"<div class='status {css}'><div class='status-title'>{esc(title)}</div>"
+                f"<div class='status-detail'>{esc(detail)}</div></div>", unsafe_allow_html=True)
+
+    left, right = st.columns(2, gap="large")
     with left:
-        st.subheader("1 · Family profile")
-        names = [p["family_name"] for p in profiles] + ["Custom profile"]
-        choice = st.selectbox("Select a family", names)
-        if choice == "Custom profile":
-            custom = st.multiselect("Allergens to avoid", list(config.ALLERGENS),
-                                    default=["Milk", "Nuts"], format_func=allergen_label)
-            profile = {"family_name": "Custom profile",
-                       "members": [{"name": "My child", "allergens": custom}]}
-        else:
-            profile = next(p for p in profiles if p["family_name"] == choice)
-        for m in profile["members"]:
-            allergies = ", ".join(allergen_label(a) for a in m["allergens"]) or "no known allergies"
-            st.markdown(f"- **{m['name']}**: {allergies}")
-
-        st.subheader("2 · Product input")
-        mode = st.radio("Input mode", ["A · Barcode", "B · Paste ingredient text", "C · Label photo"])
-
-        barcode = text = image_bytes = None
-        use_live = True
-        if mode.startswith("A"):
-            demo_codes = {f"{v['product_name']} ({k})": k for k, v in MOCK_PRODUCTS.items()}
-            pick = st.selectbox("Demo barcodes (cached offline)", ["- type your own -"] + list(demo_codes))
-            barcode = st.text_input("EAN / UPC barcode",
-                                    value=demo_codes.get(pick, "3017620422003"))
-            use_live = st.toggle("Use live Open Food Facts API", value=True,
-                                 help="Off = use the offline cache only (for flaky Wi-Fi during demos).")
-        elif mode.startswith("B"):
-            sample = st.selectbox("Load a sample label", ["- write your own -"] + list(SAMPLE_TEXTS))
-            text = st.text_area("Ingredient list (Spanish or English)",
-                                value=SAMPLE_TEXTS.get(sample, ""), height=150,
-                                placeholder="Ingredientes: harina de trigo, leche...")
-        else:
-            engines = ocr_reader.available_engines()
-            st.caption(f"OCR engine: **{engines[0] if engines else 'stub (no OCR installed)'}**")
-            upload = st.file_uploader("Upload a label photo", type=["png", "jpg", "jpeg", "webp"])
-            camera = st.camera_input("…or take a photo") if st.toggle("Use camera") else None
-            src = camera or upload
-            if src is not None:
-                image_bytes = src.getvalue()
-                st.image(image_bytes, caption="Label photo", width="stretch")
-                key = f"ocr_{hash(image_bytes)}"
-                if key not in st.session_state:
-                    with st.spinner("Reading label…"):
-                        st.session_state[key] = ocr_reader.read_label(image_bytes)
-                ocr = st.session_state[key]
-                if ocr["is_stub"]:
-                    st.warning(ocr["error"])
-                text = st.text_area("Extracted text - check and correct before analysing",
-                                    value=ocr["text"], height=150)
-
-        live_alts = st.toggle("Search live OFF for alternatives (slower)", value=False)
-        run = st.button("🔍 Analyze Product", type="primary", width="stretch")
+        st.markdown("#### Detected Allergens")
+        section_label("Direct Ingredients")
+        st.markdown(term_rows(detected, "contains", restricted), unsafe_allow_html=True)
+        section_label("Precautionary Warnings (Traces / May Contain)")
+        st.markdown(term_rows(detected, "may_contain", restricted), unsafe_allow_html=True)
+        if detected["false_friends_ignored"]:
+            section_label("Excluded Look-alike Terms")
+            st.markdown("<div class='meta'>Not EU-regulated allergens: "
+                        f"{esc(', '.join(detected['false_friends_ignored']))}.</div>", unsafe_allow_html=True)
 
     with right:
-        if run and mode.startswith("C") and image_bytes is None:
-            st.info("Upload or take a photo first.")
-        elif run:
-            with st.spinner("Analysing…"):
-                st.session_state["result"] = analyze(
-                    profile, barcode=barcode, text=text, use_live_off=use_live,
-                    use_live_alternatives=live_alts)
-                st.session_state["result_profile"] = profile["family_name"]
-
-        res = st.session_state.get("result")
-        if not res:
-            st.info("Choose a profile and an input on the left, then press **Analyze Product**.")
+        st.markdown("#### Additive & Safety Analysis")
+        section_label("Identified Additives")
+        if res["additives"]:
+            st.dataframe(pd.DataFrame([{
+                "Code": a["code"],
+                "Substance": a["name"] if a["known"] else "Not in reference dictionary",
+                "Function": a["category"] if a["known"] else "-",
+                "Description": a["en"],
+            } for a in res["additives"]]), hide_index=True, width="stretch")
         else:
-            prod = res["product"]
-            if prod is not None:
-                if prod.get("found"):
-                    c1, c2 = st.columns([1, 3])
-                    if prod.get("image_url"):
-                        c1.image(prod["image_url"], width=120)
-                    c2.markdown(f"### {prod['product_name']}\n{prod.get('brands', '')} · {prod.get('quantity', '')}")
-                    src_txt = "live Open Food Facts" if prod["source"] == "live" else "offline cache of OFF data"
-                    c2.caption(f"Barcode {prod['barcode']} · source: {src_txt} · "
-                               f"Nutri-Score: {prod.get('nutriscore_grade', 'unknown').upper()}")
-                    if prod.get("error"):
-                        c2.caption(f"ℹ️ {prod['error']}")
-                else:
-                    st.warning(f"Product not found: {prod.get('error')}. "
-                               "Try pasting the ingredient text (mode B) or a photo (mode C).")
+            st.markdown("<div class='empty'>No E-numbers identified.</div>", unsafe_allow_html=True)
 
-            v = res["verdict"]
-            fg, bg, icon = VERDICT_STYLE[v["overall_verdict"]]
-            st.markdown(
-                f"<div style='background:{bg};border-left:8px solid {fg};padding:16px 20px;border-radius:8px;'>"
-                f"<div style='color:{fg};font-size:1.6rem;font-weight:700'>{icon} {v['overall_verdict']}</div>"
-                f"<div style='color:#111;font-size:1.05rem'>{v['headline']}</div></div>",
-                unsafe_allow_html=True)
-            st.caption(v["disclaimer"])
+        section_label("Unverified Components")
+        warnings = [w for w in detected["warnings"] if w["type"] != "no_text"]
+        if warnings:
+            rows = []
+            for w in warnings:
+                related = [EU_NAME[a] for a in w["possible_allergens"]]
+                hit = set(w["possible_allergens"]) & restricted
+                tag = "<span class='tag'>PROFILE</span>" if hit else ""
+                note = f" Possible source of: {', '.join(related)}." if related else ""
+                rows.append(f"<div class='term-row{' restricted' if hit else ''}'><span class='term-src'>"
+                            f"<b>{esc(display_term(w['term']))}</b>{tag}<br>{esc(w['message'])}{esc(note)}"
+                            "</span></div>")
+            st.markdown("<div class='term-list'>" + "".join(rows) + "</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='empty'>All components were interpreted.</div>", unsafe_allow_html=True)
 
-            st.markdown("#### 👪 Per family member")
-            cols = st.columns(len(v["members"]))
-            for col, m in zip(cols, v["members"]):
-                mfg, mbg, micon = VERDICT_STYLE[m["verdict"]]
-                reasons = "<br>".join(m["reasons"]) or "Nothing from this member's list detected."
-                col.markdown(
-                    f"<div style='background:{mbg};padding:10px;border-radius:6px;min-height:110px;color:#111'>"
-                    f"<b>{micon} {m['name']}</b><br><span style='color:{mfg};font-weight:600'>{m['verdict']}</span>"
-                    f"<br><small>{reasons}</small></div>", unsafe_allow_html=True)
-
-            d = res["detected"]
-            st.markdown("#### 🧪 Detected allergens")
-            a1, a2 = st.columns(2)
-            with a1:
-                st.markdown("**Contains**")
-                if not d["contains"]:
-                    st.write("None detected")
-                for a in sorted(d["contains"]):
-                    terms = [t for t in d["detected_terms"].get(a, []) if t["section"] == "contains"]
-                    hidden = " · 🕵️ hidden name" if any(t["hidden"] for t in terms) else ""
-                    st.markdown(f"- {allergen_label(a)} ← _{', '.join(t['term'] for t in terms)}_{hidden}")
-            with a2:
-                st.markdown("**May contain (traces)**")
-                if not d["may_contain"]:
-                    st.write("None detected")
-                for a in sorted(d["may_contain"]):
-                    terms = [t for t in d["detected_terms"].get(a, []) if t["section"] == "may_contain"]
-                    st.markdown(f"- {allergen_label(a)} ← _{', '.join(t['term'] for t in terms)}_")
-
-            if d["warnings"]:
-                with st.expander(f"❓ When in doubt, warn - {len(d['warnings'])} uncertain item(s)", expanded=True):
-                    for w in d["warnings"]:
-                        could = f" (could hide: {', '.join(w['possible_allergens'])})" if w["possible_allergens"] and w["type"] != "no_text" else ""
-                        st.markdown(f"- **{w['term'] or 'No ingredients'}** - {w['message']}{could}")
-            if d["false_friends_ignored"]:
-                st.caption("✔️ Recognised as NOT allergens (false friends): " + ", ".join(d["false_friends_ignored"]))
-
-            st.markdown("#### ⚗️ Additives")
-            if not res["additives"]:
-                st.write("No E-number additives detected.")
-            else:
-                risk_icon = {"high": "🔴", "medium": "🟠", "low": "🟢", "unknown": "⚪"}
-                st.dataframe(pd.DataFrame([{
-                    "Risk": f"{risk_icon[a['risk']]} {a['risk']}", "Code": a["code"], "Name": a["name"],
-                    "Type": a["category"], "What it means": a["en"], "Explicación": a["es"]}
-                    for a in res["additives"]]), hide_index=True, width="stretch")
-
-            alts = res["alternatives"]
-            st.markdown(f"#### 🥗 Safer alternatives  ·  category: _{alts['category']}_")
-            if not alts["alternatives"]:
-                st.write("No alternative in the demo catalogue fits every allergy in this profile.")
-            for alt in alts["alternatives"]:
-                st.markdown(f"- **{alt['name']}** (Nutri-Score {str(alt.get('nutri', '?')).upper()}) - "
-                            f"{alt['why']}  \n  <small>source: {alt['source']}</small>", unsafe_allow_html=True)
-            st.caption(alts["note"])
-
-            with st.expander("Ingredient text analysed"):
-                st.code(res["ingredient_text"] or "(empty)", language=None)
-
-# ---------------------------------------------------------------------------
-# Tab 2: Benchmark
-# ---------------------------------------------------------------------------
-with tab_bench:
-    st.subheader("Benchmark Run 1 · ingredient text → allergen parser")
-    st.markdown("10 canonical cases from Session 2, groups **A** plain names · **B** hidden derivatives · "
-                "**C** may-contain · **D** clean control · **E** false friends · **F** complex dishes.")
-    if st.button("▶️ Run benchmark", type="primary") or "bench" not in st.session_state:
-        st.session_state["bench"] = run_benchmark()
-    report = st.session_state["bench"]
-    s = report["summary"]
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Catch rate (recall)", f"{s['catch_rate']:.0%}",
-              f"{s['lift_vs_baseline_pp']:+.0f} pp vs {s['baseline_reference']:.0%} baseline")
-    m2.metric("False alarms", s["false_alarms"], f"naive: {s['naive_false_alarms']}", delta_color="off")
-    m3.metric("Cases passed", f"{s['cases_passed']}/{s['n_cases']}")
-    m4.metric("Contains vs traces accuracy", f"{s['section_accuracy']:.0%}")
-
-    if s["beats_baseline"]:
-        st.success(f"✅ Beats the {s['baseline_reference']:.0%} keyword baseline "
-                   f"(our reproduction of the naive scanner scores {s['naive_catch_rate']:.0%}).")
+    st.markdown("#### Compatible Product Alternatives")
+    alts = res["alternatives"]
+    if alts["alternatives"]:
+        st.dataframe(pd.DataFrame([{
+            "Product": a["name"],
+            "Brand": a.get("brand") or ("Product type" if a["source"] == "Curated catalogue" else "-"),
+            "Nutri-Score": (a.get("nutri") or "").upper() if a.get("nutri") not in (None, "", "unknown") else "-",
+            "Barcode": a.get("barcode") or "-",
+            "Basis": a["why"],
+            "Source": a["source"],
+        } for a in alts["alternatives"]]), hide_index=True, width="stretch")
     else:
-        st.error("❌ Does not beat the baseline.")
+        st.markdown("<div class='empty'>No alternative in the reference set satisfies every restriction in "
+                    "this profile.</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='meta'>{esc(alts['note'])}</div>", unsafe_allow_html=True)
 
-    st.dataframe(pd.DataFrame([{
-        "#": r["id"], "Group": f"{r['group']} · {r['group_name']}", "Result": "✅ PASS" if r["passed"] else "❌ FAIL",
-        "Label text": r["text"],
-        "Expected": ", ".join(r["expected_contains"] + [f"(traces) {x}" for x in r["expected_may_contain"]]) or "none",
-        "Detected": ", ".join(r["detected_contains"] + [f"(traces) {x}" for x in r["detected_may_contain"]]) or "none",
-        "Missed": ", ".join(r["missed"]), "False alarms": ", ".join(r["false_alarms"]),
-        "Naive baseline found": ", ".join(r["naive_detected"]) or "none",
-        "Guardrail warnings": ", ".join(r["warnings"]),
-    } for r in report["cases"]]), hide_index=True, width="stretch")
-
-    chart = pd.DataFrame({"Catch rate": [s["naive_catch_rate"], s["baseline_reference"], s["catch_rate"]]},
-                         index=["Naive keyword (reproduced)", "Spec baseline", "Our parser"])
-    st.bar_chart(chart, horizontal=True)
-    st.caption("Caveat: these 10 cases were used while building the synonym dictionary, so 100% is an "
-               "in-sample score. Level 3 needs a held-out set of real Spanish supermarket labels.")
-
-# ---------------------------------------------------------------------------
-# Tab 3: Architecture
-# ---------------------------------------------------------------------------
-with tab_arch:
-    st.subheader("Level 2 walking skeleton")
-    st.graphviz_chart("""
-digraph G {
-  rankdir=LR; node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
-  user [label="👪 Parent\\n(barcode / text / photo)", fillcolor="#e0e7ff"];
-  off  [label="DATA\\noff_client.py\\nOpen Food Facts API\\n+ offline cache", fillcolor="#dcfce7"];
-  ocr  [label="DATA\\nocr_reader.py\\nEasyOCR / Tesseract\\n(stub fallback)", fillcolor="#fef9c3"];
-  parse[label="PROCESSING\\nallergen_parser.py\\nEU-14 synonyms, false friends,\\nmay-contain split", fillcolor="#dcfce7"];
-  guard[label="GUARDRAIL\\nWhen in doubt, warn", fillcolor="#dcfce7"];
-  prof [label="AI / RULES\\nprofile_matcher.py\\nfamily verdict", fillcolor="#dcfce7"];
-  add  [label="additives_service.py\\nE-number dictionary", fillcolor="#fef9c3"];
-  alt  [label="alternatives_service.py\\ncurated catalogue\\n(+ optional OFF search)", fillcolor="#fef9c3"];
-  ui   [label="OUTPUT\\napp.py (Streamlit)\\nverdict · allergens ·\\nadditives · alternatives", fillcolor="#e0e7ff"];
-  user -> off; user -> ocr; user -> parse [label="text"];
-  off -> parse; ocr -> parse; parse -> guard -> prof -> ui; parse -> add -> ui; prof -> alt -> ui; ui -> user [label="decision"];
-}
-""")
-    st.caption("🟩 real  ·  🟨 stub / partial  ·  orchestrated by modules/pipeline.py")
-
-    st.subheader("Real vs. Faked")
-    st.dataframe(pd.DataFrame([
-        ["Barcode lookup", "REAL", "Live Open Food Facts API v2", "Offline cache of 5 real OFF records if network fails"],
-        ["Ingredient → allergen parser", "REAL", "Regex + EU-14 bilingual synonym dictionary, hidden derivatives, E220-E228", "Dictionary is hand-curated (~300 terms), not exhaustive"],
-        ["May-contain detection", "REAL", "Clause splitting on ES/EN/FR/CA trigger phrases", "-"],
-        ["False-friend handling", "REAL", "Per-allergen masking (coconut, buckwheat, cocoa butter, lactic acid, nutmeg…)", "-"],
-        ["'When in doubt, warn' guardrail", "REAL", "Ambiguous terms, unknown E-numbers, unparsed chemicals, missing text", "-"],
-        ["Family profile matcher", "REAL logic", "Per-member verdict + worst-case family verdict", "Profiles are demo JSON, no login / persistence"],
-        ["Label photo OCR", "PARTIAL", "EasyOCR or Tesseract when installed; user can correct text", "Falls back to a fixed demo label when no OCR engine is installed"],
-        ["Additive risk lookup", "STUB", "Regex E-number detection", "~35-entry curated dictionary instead of full EFSA taxonomy"],
-        ["Alternatives", "STUB", "Category detection + allergen filter; optional live OFF search", "Curated generic product types, not real shelf inventory"],
-        ["Mobile camera app", "FAKED", "Streamlit camera_input in the browser", "No native app, no live barcode video scanning"],
-    ], columns=["Component", "Status", "What is real", "What is faked / limits"]),
-        hide_index=True, width="stretch")
+    with st.expander("Analysed ingredient text"):
+        st.code(res["ingredient_text"] or "(none)", language=None, wrap_lines=True)

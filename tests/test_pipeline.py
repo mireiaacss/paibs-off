@@ -15,8 +15,9 @@ from modules.ocr_reader import read_label  # noqa: E402
 from modules.off_client import get_product_by_barcode  # noqa: E402
 from modules.pipeline import analyze  # noqa: E402
 from modules.profile_matcher import ALERT, SAFE, TRACES, UNCERTAIN, load_profiles, match_profile  # noqa: E402
+from modules.alternatives_service import get_alternatives  # noqa: E402
 
-DEMO_FAMILY = load_profiles()[0]  # Milk, Nuts / Eggs
+DEMO_FAMILY = next(p for p in load_profiles() if p["family_name"] == "Household - Dairy, Tree Nut & Egg")
 
 
 @pytest.mark.parametrize("case", load_cases()["cases"], ids=lambda c: f"case{c['id']}-{c['group']}")
@@ -62,7 +63,7 @@ def test_profile_verdicts():
 
 def test_disclaimer_always_present():
     v = match_profile(parse_allergens("Arroz, agua, sal"), DEMO_FAMILY)
-    assert "Always verify the physical packaging label" in v["disclaimer"]
+    assert "Cross-reference all automated assessments" in v["disclaimer"]
 
 
 def test_additives_lookup():
@@ -91,12 +92,52 @@ def test_end_to_end_photo_stub():
     assert res["verdict"]["overall_verdict"] == ALERT
 
 
-def test_streamlit_app_runs():
+def test_standard_sensitivity_does_not_escalate_ambiguity():
+    detected = parse_allergens("Arroz, aromas")         # aromas could hide Milk
+    assert match_profile(detected, DEMO_FAMILY, "maximum")["overall_verdict"] == UNCERTAIN
+    standard = match_profile(detected, DEMO_FAMILY, "standard")
+    assert standard["overall_verdict"] == SAFE
+    assert any(m["uncertain_hits"] for m in standard["members"])   # still reported
+
+
+def test_missing_ingredients_never_safe_even_at_standard():
+    assert match_profile(parse_allergens(""), DEMO_FAMILY, "standard")["overall_verdict"] == UNCERTAIN
+
+
+def test_curated_alternatives_respect_profile():
+    alts = get_alternatives({"Milk", "Peanuts"}, ingredient_text="croissant", use_live=False)["alternatives"]
+    assert alts and all({"Milk", "Peanuts"} <= set(a["free_of"]) for a in alts)
+
+
+def _app():
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
+    return AppTest.from_file(str(ROOT / "app.py"), default_timeout=60)
+
+
+def test_app_has_no_tabs_and_no_emoji():
+    import re
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert not re.search("[\U0001F300-\U0001FAFF\u2600-\u27BF]", source)
+    at = _app().run()
     assert not at.exception
-    at.radio[0].set_value("B · Paste ingredient text").run()
+    assert len(at.tabs) == 0
+
+
+def test_app_text_flow_conflict():
+    at = _app().run()
+    at.segmented_control[0].set_value("Ingredient Text").run()
     at.text_area[0].set_value("Harina de trigo, leche, huevo. Puede contener trazas de avellanas.").run()
-    next(b for b in at.button if "Analyze" in b.label).click().run()
+    next(b for b in at.button if b.label == "Analyze Ingredients").click().run()
     assert not at.exception
-    assert any("ALERT: DANGEROUS" in m.value for m in at.markdown)
+    assert any("RESTRICTION CONFLICT DETECTED" in m.value for m in at.markdown)
+
+
+def test_app_barcode_flow_offline_clear():
+    at = _app().run()
+    at.sidebar.checkbox[0].uncheck()     # live OFF lookup off -> cached record
+    at.sidebar.checkbox[1].uncheck()     # live alternatives off
+    at.run()
+    next(b for b in at.button if b.label == "Allergen-free grain cake").click().run()
+    next(b for b in at.button if b.label == "Analyze Ingredients").click().run()
+    assert not at.exception
+    assert any("NO CONFLICTS IDENTIFIED WITH ACTIVE PROFILE" in m.value for m in at.markdown)

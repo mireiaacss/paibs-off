@@ -1,5 +1,5 @@
 {
-  "description": "PAIBS Group 10 - 10 canonical benchmark cases (Session 2). Groups: A plain names, B hidden derivatives / E-numbers, C precautionary 'may contain', D clean control, E false friends, F complex multi-allergen dishes.",
+  "description": "PAIBS Group 10 - 10 canonical benchmark cases (Session 2). Groups: A plain names, B hidden derivatives / E-numbers, C precautionary may-contain, D allergen-free control, E false friends, F rare allergens in complex dishes.",
   "baseline_recall_reference": 0.57,
   "cases": [
     {"id": 1, "group": "A", "group_name": "Plain allergen names",
@@ -20,13 +20,13 @@
     {"id": 6, "group": "B", "group_name": "Hidden derivatives (E-number)",
      "text": "Dried apricots, preservative (E220)",
      "expected_contains": ["Sulphites"], "expected_may_contain": []},
-    {"id": 7, "group": "D", "group_name": "Clean control",
+    {"id": 7, "group": "D", "group_name": "Allergen-free control",
      "text": "Arroz, agua, aceite de oliva virgen extra, sal",
      "expected_contains": [], "expected_may_contain": []},
-    {"id": 8, "group": "F", "group_name": "Complex multi-allergen",
+    {"id": 8, "group": "F", "group_name": "Rare allergens in complex dishes",
      "text": "Surimi (pescado blanco, almidón de trigo, clara de huevo), gambas, mejillones, salsa (mostaza)",
      "expected_contains": ["Fish", "Gluten", "Eggs", "Crustaceans", "Molluscs", "Mustard"], "expected_may_contain": []},
-    {"id": 9, "group": "F", "group_name": "Complex multi-allergen",
+    {"id": 9, "group": "F", "group_name": "Rare allergens in complex dishes",
      "text": "Vegetable stock (celeriac), lupin flour, ghee",
      "expected_contains": ["Celery", "Lupin", "Milk"], "expected_may_contain": []},
     {"id": 10, "group": "B", "group_name": "Hidden derivatives",

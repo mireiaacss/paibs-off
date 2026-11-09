@@ -6,9 +6,11 @@ Level 2 behaviour:
   * return 2-3 curated, generic product *types* that are free of the family's
     allergens (we deliberately do not claim that a specific branded product is
     allergen-free - brand recipes change)
-  * optional: query Open Food Facts search for same-category products whose
-    allergen + trace tags avoid the family's allergens, sorted by Nutri-Score.
-    Any failure silently falls back to the curated list.
+  * optional: query the Open Food Facts search service (search.openfoodfacts.org)
+    for same-category products whose allergen AND trace tags avoid the profile's
+    allergens, with a completed ingredient list and Nutri-Score A-C. Each hit is
+    re-checked locally (OFF data is crowdsourced: a "pan de leche" can be missing
+    its milk tag). Any failure falls back to the curated list.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from modules.allergen_parser import normalize
 
 CATEGORY_KEYWORDS = {
     "spread": ["spread", "untable", "crema de cacao", "nutella", "pate a tartiner", "tartiner"],
+    "pastry": ["croissant", "cruasan", "napolitana", "bolleria", "magdalena", "donut", "pastry"],
     "biscuits": ["biscuit", "galleta", "cookie", "biscuits", "galletas"],
     "cereal": ["cereal", "muesli", "granola", "cruesli", "copos", "avena"],
     "chocolate": ["chocolate", "cocoa", "cacao", "candy", "bar"],
@@ -37,11 +40,21 @@ OFF_CATEGORY_HINTS = {
     "en:breads": "pasta_bread", "en:pastas": "pasta_bread", "en:dairies": "dairy",
     "en:milks": "dairy", "en:crisps": "snack", "en:salty-snacks": "snack",
     "en:sodas": "drink", "en:beverages": "drink", "en:seafood": "seafood",
+    "en:sweet-pastries-and-pies": "pastry", "en:viennoiseries": "pastry", "en:croissants": "pastry",
+    "en:puffed-cereal-cakes": "snack", "en:puffed-rice-cakes": "snack",
 }
 
 # free_of = allergens the product type is typically formulated without.
 # nutri = indicative Nutri-Score for the product type.
 CATALOGUE = {
+    "pastry": [
+        {"name": "Plain rice cakes", "free_of": ["Milk", "Nuts", "Peanuts", "Gluten", "Eggs", "Soy", "Sesame"], "nutri": "a",
+         "why": "Single-ingredient alternative with no added fat or sugar."},
+        {"name": "Wholegrain toast with fruit (egg- and dairy-free bread)", "free_of": ["Milk", "Eggs", "Nuts", "Peanuts", "Soy"], "nutri": "a",
+         "why": "Lower in saturated fat and sugar than laminated pastry."},
+        {"name": "Certified gluten-free sponge cake (dairy-free)", "free_of": ["Gluten", "Milk", "Nuts", "Peanuts"], "nutri": "c",
+         "why": "For coeliac profiles; check the egg declaration."},
+    ],
     "spread": [
         {"name": "Sunflower-seed cocoa spread", "free_of": ["Milk", "Nuts", "Peanuts", "Gluten", "Eggs", "Soy"], "nutri": "d",
          "why": "Gets its creaminess from sunflower seeds instead of hazelnuts and milk."},
@@ -132,56 +145,78 @@ def detect_category(ingredient_text: str = "", product_name: str = "", categorie
     return "generic"
 
 
-def _live_off_alternatives(categories_tags: list, avoid: set, limit: int = 3, timeout: float = 6) -> list[dict]:
-    category_tag = next((t for t in reversed(categories_tags or []) if t.startswith("en:")), None)
-    if not category_tag:
-        return []
-    resp = requests.get(
-        "https://world.openfoodfacts.org/api/v2/search",
-        params={
-            "categories_tags": category_tag,
-            "fields": "code,product_name,brands,allergens_tags,traces_tags,nutriscore_grade,ingredients_text",
-            "sort_by": "nutriscore_score",
-            "page_size": 50,
-        },
-        headers={"User-Agent": config.OFF_USER_AGENT},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
+SEARCH_URL = "https://search.openfoodfacts.org/search"
+
+
+def _search_query(category_tag: str, avoid_tags: set, country: str | None) -> str:
+    parts = [f'categories_tags:"{category_tag}"', 'states_tags:"en:ingredients-completed"',
+             "nutriscore_grade:(a OR b OR c)"]
+    for tag in sorted(avoid_tags):
+        parts += [f'-allergens_tags:"{tag}"', f'-traces_tags:"{tag}"']
+    if country:
+        parts.append(f'countries_tags:"{country}"')
+    return " ".join(parts)
+
+
+def _live_off_alternatives(categories_tags: list, avoid: set, limit: int = 3, timeout: float = 8,
+                           exclude_barcode: str | None = None) -> list[dict]:
+    """Query OFF for same-category products compatible with `avoid`. Raises on network errors."""
+    from modules.allergen_parser import parse_allergens  # local import avoids a cycle at module load
+
+    en_tags = [t for t in (categories_tags or []) if t.startswith("en:")]
     avoid_tags = {config.ALLERGEN_TO_OFF_TAG[a] for a in avoid if a in config.ALLERGEN_TO_OFF_TAG}
-    out = []
-    for p in resp.json().get("products", []):
-        tags = set(p.get("allergens_tags", [])) | set(p.get("traces_tags", []))
-        if not p.get("product_name") or not p.get("ingredients_text"):
-            continue  # no ingredient list = cannot vouch for it
-        if tags & avoid_tags:
-            continue
-        if (p.get("nutriscore_grade") or "z") not in "ab":
-            continue
-        out.append({
-            "name": f"{p['product_name']} ({p.get('brands', '')})".strip(),
-            "barcode": p.get("code"),
-            "nutri": p.get("nutriscore_grade"),
-            "why": "Open Food Facts lists no allergen or trace tag from your family profile.",
-            "source": "Open Food Facts (live)",
-        })
-        if len(out) >= limit:
+    # Most specific category first, then its parent; Spain first, then worldwide
+    attempts = [(tag, country) for tag in en_tags[::-1][:2] for country in ("en:spain", None)]
+    out, seen = [], {exclude_barcode}
+    for tag, country in attempts:
+        resp = requests.get(
+            SEARCH_URL,
+            params={"q": _search_query(tag, avoid_tags, country), "page_size": 20,
+                    "sort_by": "-unique_scans_n",
+                    "fields": "code,product_name,brands,nutriscore_grade,allergens_tags,traces_tags"},
+            headers={"User-Agent": config.OFF_USER_AGENT},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        for p in resp.json().get("hits", []):
+            name = (p.get("product_name") or "").strip()
+            tags = set(p.get("allergens_tags") or []) | set(p.get("traces_tags") or [])
+            if not name or p.get("code") in seen or tags & avoid_tags:
+                continue
+            # Local re-check (OFF tags are crowdsourced): a name that itself reveals an EU
+            # allergen ("croissant de crevettes", "pan de leche") is not a lower-risk option
+            if parse_allergens(name)["contains"]:
+                continue
+            brands = p.get("brands") or []
+            brands = ", ".join(brands) if isinstance(brands, list) else str(brands)
+            seen.add(p.get("code"))
+            out.append({
+                "name": name,
+                "brand": brands,
+                "barcode": p.get("code"),
+                "nutri": p.get("nutriscore_grade") or "unknown",
+                "why": "No allergen or trace declaration from the active profile in Open Food Facts.",
+                "source": "Open Food Facts",
+            })
+        if len(out) >= limit:          # stop at the most specific / local query that suffices
             break
-    return out
+    out.sort(key=lambda a: a["nutri"])          # Nutri-Score A first
+    return out[:limit]
 
 
 def get_alternatives(family_allergens: set | list, ingredient_text: str = "", product_name: str = "",
-                     categories_tags: list | None = None, use_live: bool = False, limit: int = 3) -> dict:
+                     categories_tags: list | None = None, use_live: bool = False, limit: int = 3,
+                     exclude_barcode: str | None = None) -> dict:
     """
     Return {"category", "alternatives": [{name, nutri, why, source, free_of?}], "source", "note"}.
     """
     avoid = set(family_allergens or [])
     category = detect_category(ingredient_text, product_name, categories_tags)
-    note = "Suggestions are product types, not endorsements. Always check the label of the product you buy."
+    note = "Suggestions are not endorsements. Verify the label of any product before purchase."
 
     if use_live and categories_tags:
         try:
-            live = _live_off_alternatives(categories_tags, avoid, limit=limit)
+            live = _live_off_alternatives(categories_tags, avoid, limit=limit, exclude_barcode=exclude_barcode)
             if live:
                 return {"category": category, "alternatives": live, "source": "live", "note": note}
         except (requests.RequestException, ValueError):
@@ -191,7 +226,7 @@ def get_alternatives(family_allergens: set | list, ingredient_text: str = "", pr
     picked, names = [], set()
     for alt in options:
         if avoid.issubset(set(alt["free_of"])) and alt["name"] not in names:
-            picked.append({**alt, "source": "Curated demo catalogue"})
+            picked.append({**alt, "brand": "", "barcode": None, "source": "Curated catalogue"})
             names.add(alt["name"])
         if len(picked) >= limit:
             break

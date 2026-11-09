@@ -8,6 +8,13 @@ Verdict levels, worst first:
                                     or there is no ingredient list at all ("When in doubt, warn")
   SAFE ACCORDING TO DETECTED LIST - nothing detected for this family
 
+Sensitivity:
+  "maximum"  (default) - ambiguous ingredients that could hide a restricted
+                         allergen escalate the verdict to WARNING: UNCERTAIN.
+  "standard"           - ambiguous ingredients are still reported per member
+                         (uncertain_hits) but do not change the verdict.
+  In both modes a missing ingredient list is never reported as SAFE.
+
 Every result carries the mandatory safety disclaimer.
 """
 
@@ -42,7 +49,10 @@ def load_profiles(path: str | Path = PROFILE_PATH) -> list[dict]:
     return profiles
 
 
-def _member_verdict(member: dict, detected: dict) -> dict:
+SENSITIVITIES = ("maximum", "standard")
+
+
+def _member_verdict(member: dict, detected: dict, sensitivity: str = "maximum") -> dict:
     allergies = set(member.get("allergens", []))
     contains_hit = sorted(allergies & set(detected.get("contains", set())))
     traces_hit = sorted(allergies & set(detected.get("may_contain", set())))
@@ -57,7 +67,9 @@ def _member_verdict(member: dict, detected: dict) -> dict:
         verdict = ALERT
     elif traces_hit:
         verdict = TRACES
-    elif uncertain:
+    elif any(w.get("type") == "no_text" for w in detected.get("warnings", [])):
+        verdict = UNCERTAIN
+    elif uncertain and sensitivity == "maximum":
         verdict = UNCERTAIN
     else:
         verdict = SAFE
@@ -85,15 +97,17 @@ def _member_verdict(member: dict, detected: dict) -> dict:
     }
 
 
-def match_profile(detected_allergens: dict, profile: dict) -> dict:
+def match_profile(detected_allergens: dict, profile: dict, sensitivity: str = "maximum") -> dict:
     """
     Compare parser output against a family profile.
 
     `profile` is either a family {"family_name", "members": [...]} or a single
-    member {"name", "allergens": [...]}.
+    member {"name", "allergens": [...]}. `sensitivity` is "maximum" or "standard".
     """
+    if sensitivity not in SENSITIVITIES:
+        raise ValueError(f"sensitivity must be one of {SENSITIVITIES}")
     members = profile.get("members") or [profile]
-    results = [_member_verdict(m, detected_allergens) for m in members]
+    results = [_member_verdict(m, detected_allergens, sensitivity) for m in members]
     worst = max(results, key=lambda r: LEVELS[r["verdict"]]) if results else None
     overall = worst["verdict"] if worst else SAFE
 
@@ -113,5 +127,6 @@ def match_profile(detected_allergens: dict, profile: dict) -> dict:
         "colour": COLOURS[overall],
         "headline": headline,
         "members": results,
+        "sensitivity": sensitivity,
         "disclaimer": config.SAFETY_DISCLAIMER,
     }

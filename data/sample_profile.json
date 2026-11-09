@@ -1,30 +1,28 @@
 {
   "profiles": [
     {
-      "family_name": "Demo Family (Dairy, Nuts, Eggs)",
+      "family_name": "Child - Dairy & Peanut Allergy",
       "members": [
-        {"name": "Child 1 - Leo (6)", "allergens": ["Milk", "Nuts"]},
-        {"name": "Child 2 - Emma (3)", "allergens": ["Eggs"]},
-        {"name": "Parent", "allergens": []}
+        {"name": "Child", "allergens": ["Milk", "Peanuts"]}
       ]
     },
     {
-      "family_name": "Coeliac household",
+      "family_name": "Celiac - Strict Gluten-Free",
       "members": [
-        {"name": "Child - Pau (9)", "allergens": ["Gluten"]}
+        {"name": "Child", "allergens": ["Gluten"]}
       ]
     },
     {
-      "family_name": "Peanut & Sesame family",
+      "family_name": "Household - Dairy, Tree Nut & Egg",
       "members": [
-        {"name": "Child - Noa (4)", "allergens": ["Peanuts", "Sesame"]},
-        {"name": "Parent", "allergens": ["Crustaceans", "Molluscs"]}
+        {"name": "Child 1", "allergens": ["Milk", "Nuts"]},
+        {"name": "Child 2", "allergens": ["Eggs"]}
       ]
     },
     {
-      "family_name": "Soy & Sulphite sensitive",
+      "family_name": "Child - Sesame, Soy & Sulphite Sensitivity",
       "members": [
-        {"name": "Child - Iker (7)", "allergens": ["Soy", "Sulphites"]}
+        {"name": "Child", "allergens": ["Sesame", "Soy", "Sulphites"]}
       ]
     }
   ]

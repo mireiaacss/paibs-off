@@ -19,8 +19,8 @@ label text and these terms (lower-case, accents stripped) before matching.
 """
 
 SAFETY_DISCLAIMER = (
-    "⚠️ Always verify the physical packaging label. "
-    "Do not rely solely on automated detection."
+    "Notice: Cross-reference all automated assessments against physical "
+    "product packaging prior to consumption."
 )
 
 # ---------------------------------------------------------------------------
