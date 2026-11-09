@@ -1,0 +1,31 @@
+{
+  "profiles": [
+    {
+      "family_name": "Demo Family (Dairy, Nuts, Eggs)",
+      "members": [
+        {"name": "Child 1 - Leo (6)", "allergens": ["Milk", "Nuts"]},
+        {"name": "Child 2 - Emma (3)", "allergens": ["Eggs"]},
+        {"name": "Parent", "allergens": []}
+      ]
+    },
+    {
+      "family_name": "Coeliac household",
+      "members": [
+        {"name": "Child - Pau (9)", "allergens": ["Gluten"]}
+      ]
+    },
+    {
+      "family_name": "Peanut & Sesame family",
+      "members": [
+        {"name": "Child - Noa (4)", "allergens": ["Peanuts", "Sesame"]},
+        {"name": "Parent", "allergens": ["Crustaceans", "Molluscs"]}
+      ]
+    },
+    {
+      "family_name": "Soy & Sulphite sensitive",
+      "members": [
+        {"name": "Child - Iker (7)", "allergens": ["Soy", "Sulphites"]}
+      ]
+    }
+  ]
+}

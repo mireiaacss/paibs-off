@@ -1,0 +1,11 @@
+# Core (tested with Python 3.11, streamlit 1.67, pandas 3.1, requests 2.34, pillow 13.0)
+streamlit>=1.40
+pandas>=2.0
+requests>=2.31
+pillow>=10.0
+pytest>=8.0
+
+# Optional OCR engines for real label-photo reading (mode C).
+# Without them the app uses a documented stub label text.
+# easyocr>=1.7            # pulls in torch (~1 GB)
+# pytesseract>=0.3.10     # also needs: brew install tesseract tesseract-lang
