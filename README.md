@@ -1,4 +1,4 @@
-# 🛡️ SafeBite: AI Allergen Label Scanner
+# SafeBite: AI Allergen Label Scanner
 
 ![Level](https://img.shields.io/badge/PAIBS%20Level-2%20%C2%B7%20Walking%20Skeleton%20Running-brightgreen)
 ![Benchmark](https://img.shields.io/badge/Benchmark%20Run%201-100%25%20catch%20rate%20%C2%B7%200%20false%20alarms-blue)
@@ -7,7 +7,7 @@
 
 > We are building an AI-powered label scanner for parents with allergy-sensitive children so they can instantly detect hidden allergens and risky additives from a photo and discover safe, healthier supermarket alternatives in real time.
 
-> ⚠️ **Always verify the physical packaging label. Do not rely solely on automated detection.** This is a student prototype, not a medical device.
+>  **Always verify the physical packaging label. Do not rely solely on automated detection.** This is a student prototype, not a medical device.
 
 ---
 
