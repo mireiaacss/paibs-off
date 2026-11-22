@@ -220,8 +220,12 @@ st.markdown(f"<div class='notice'>{esc(config.SAFETY_DISCLAIMER)}</div>", unsafe
 # Step 1 - Input
 # ---------------------------------------------------------------------------
 st.markdown("### 1. Product Input")
-mode = st.segmented_control("Input method", ["Barcode Lookup", "Label Photo", "Ingredient Text"],
-                            default="Barcode Lookup", required=True, key="mode")
+mode = st.segmented_control(
+    "Input method",
+    ["Barcode Lookup", "Label Photo", "Ingredient Text"],
+    default="Barcode Lookup",
+    key="mode",
+) or "Barcode Lookup"
 
 barcode = text = None
 photo_ready = True
